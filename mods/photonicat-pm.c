@@ -1383,8 +1383,47 @@ static ssize_t movement_trigger_show(struct kobject *kobj,
 	return sprintf(buf, "%u\n", pm_data->movement_activated ? 1 : 0);
 }
 
-static struct kobj_attribute pcat_pm_sysfs_attribute =
+static struct kobj_attribute pcat_pm_sysfs_movement_trigger_attribute =
 	__ATTR_RO(movement_trigger);
+
+static ssize_t gs_x_show(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	struct pcat_pm_data *pm_data;
+	
+	pm_data = container_of(kobj, struct pcat_pm_data, kobject);
+
+	return sprintf(buf, "%d\n", pm_data->gs_x);
+}
+
+static struct kobj_attribute pcat_pm_sysfs_gs_x_attribute =
+	__ATTR_RO(gs_x);
+	
+static ssize_t gs_y_show(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	struct pcat_pm_data *pm_data;
+	
+	pm_data = container_of(kobj, struct pcat_pm_data, kobject);
+
+	return sprintf(buf, "%d\n", pm_data->gs_y);
+}
+
+static struct kobj_attribute pcat_pm_sysfs_gs_y_attribute =
+	__ATTR_RO(gs_y);
+	
+static ssize_t gs_z_show(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	struct pcat_pm_data *pm_data;
+	
+	pm_data = container_of(kobj, struct pcat_pm_data, kobject);
+
+	return sprintf(buf, "%d\n", pm_data->gs_z);
+}
+
+static struct kobj_attribute pcat_pm_sysfs_gs_z_attribute =
+	__ATTR_RO(gs_z);
 
 static int pcat_pm_probe(struct serdev_device *serdev)
 {
@@ -1404,15 +1443,32 @@ static int pcat_pm_probe(struct serdev_device *serdev)
 	init_waitqueue_head(&pm_data->ctl_wait);
 	
 	pm_data->status_report_timestamp = ktime_get_boottime_ns();
-	pm_data->status_report_timeout_warn_timestamp = pm_data->status_report_timestamp;
+	pm_data->status_report_timeout_warn_timestamp =
+		pm_data->status_report_timestamp;
 	
 	ret = kobject_init_and_add(&pm_data->kobject, &pcat_pm_kobj_ktype,
 		kernel_kobj, "%s", "photonicat-pm");
 	if (!ret) {
 		ret = sysfs_create_file(&pm_data->kobject,
-			&pcat_pm_sysfs_attribute.attr);
+			&pcat_pm_sysfs_movement_trigger_attribute.attr);
 		if (ret)
-			dev_err(dev, "Failed to create sysfs file: %d\n", ret);
+			dev_err(dev, "Failed to create sysfs file for movement "
+				"trigger: %d\n", ret);
+				
+		ret = sysfs_create_file(&pm_data->kobject,
+			&pcat_pm_sysfs_gs_x_attribute.attr);
+		if (ret)
+			dev_err(dev, "Failed to create sysfs file for GS X: %d\n", ret);
+				
+		ret = sysfs_create_file(&pm_data->kobject,
+			&pcat_pm_sysfs_gs_y_attribute.attr);
+		if (ret)
+			dev_err(dev, "Failed to create sysfs file for GS Y: %d\n", ret);
+			
+		ret = sysfs_create_file(&pm_data->kobject,
+			&pcat_pm_sysfs_gs_z_attribute.attr);
+		if (ret)
+			dev_err(dev, "Failed to create sysfs file for GS Z: %d\n", ret);
 	} else {
 		dev_err(dev, "Failed to initialize kernel object: %d\n", ret);
 	}
