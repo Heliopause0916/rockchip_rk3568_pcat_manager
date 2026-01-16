@@ -96,7 +96,15 @@ static PCatModemManagerUSBData g_pcat_modem_manager_supported_dev_list[] =
         .power_usage = 1,
         .external_control_exec = "quectel-cm",
         .external_control_exec_is_daemon = FALSE
-    }
+    },
+    {
+        .device_type = PCAT_MODEM_MANAGER_DEVICE_5G,
+        .id_vendor = 0x0E8D,
+        .id_product = 0x7127,
+        .power_usage = 1,
+        .external_control_exec = "fm350-mm.py",
+        .external_control_exec_is_daemon = FALSE
+    },
 };
 
 static PCatModemManagerData g_pcat_modem_manager_data = {0};
