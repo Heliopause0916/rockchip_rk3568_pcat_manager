@@ -308,6 +308,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
         if result.returncode == 0:
             res_parts = result.stdout.strip().split(".")
             if len(res_parts) >= 3:
+                fw_interfaces = []
                 fw_zone_base = res_parts[0] + "." + res_parts[1]
                 result = subprocess.run("uci -q get {0}.network".format(fw_zone_base), capture_output=True, text=True, shell=True)
                 if result.returncode == 0:
@@ -316,6 +317,9 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
                         fw_ready = True
 
                 if not fw_ready:
+                    os.system("uci -q del {0}.network".format(fw_zone_base))
+                    for fw_interface in fw_interfaces:
+                        os.system("uci add_list {0}.network={1}".format(fw_zone_base, fw_interface))
                     os.system("uci add_list {0}.network={1}".format(fw_zone_base, fm350_openwrt_interface_name))
                     os.system("uci commit firewall")
                     os.system("/etc/init.d/firewall restart")
