@@ -91,6 +91,10 @@ class SerialReader:
 
 def fm350_dial_prepare(sr):
     sr.recv_data_clear()
+    sr.send_data("AT+GTDUALSIM=0")
+    sbuf = sr.recv_data_with_timeout().strip()
+
+    sr.recv_data_clear()
     sr.send_data("AT+CPIN?")
     sbuf = sr.recv_data_with_timeout().strip()
 
