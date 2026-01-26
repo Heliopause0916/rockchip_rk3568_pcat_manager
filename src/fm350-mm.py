@@ -133,9 +133,7 @@ def fm350_at_dial(sr, pdp_index, apn_str):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
-        sr.close()
         print("AT command AT+CGACT failed: {0}".format(sbuf))
-        sys.exit(7)
 
 def fm350_at_watch_signal_info(sr, iface, pdp_index):
     rssi_raw = 99
