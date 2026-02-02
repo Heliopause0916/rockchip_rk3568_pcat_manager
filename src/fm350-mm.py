@@ -91,6 +91,21 @@ class SerialReader:
 
 def fm350_dial_prepare(sr):
     sr.recv_data_clear()
+    sr.send_data("AT+GTFCCLOCKMODE?")
+    sbuf = sr.recv_data_with_timeout().strip()
+
+    if "+GTFCCLOCKMODE: 2" in sbuf or "+GTFCCLOCKMODE: 1" in sbuf:
+        print("FCC lock detected, try to unlock and reset modem...")
+        sr.recv_data_clear()
+        sr.send_data("AT+GTFCCLOCKMODE=0")
+        sbuf = sr.recv_data_with_timeout().strip()
+
+        sr.recv_data_clear()
+        sr.send_data("AT+CFUN=1,1")
+
+        return False
+
+    sr.recv_data_clear()
     sr.send_data("AT+GTDUALSIM=0")
     sbuf = sr.recv_data_with_timeout().strip()
 

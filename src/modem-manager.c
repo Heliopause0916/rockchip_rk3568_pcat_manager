@@ -813,6 +813,7 @@ static gboolean pcat_modem_scan_timeout_func(gpointer user_data)
     return TRUE;
 }
 
+/*
 static gboolean pcat_modem_manager_delayed_modem_unblock_func(
     gpointer user_data)
 {
@@ -823,12 +824,13 @@ static gboolean pcat_modem_manager_delayed_modem_unblock_func(
 
     return FALSE;
 }
+*/
 
 gboolean pcat_modem_manager_init()
 {
     int errcode;
     PCatManagerMainConfigData *main_config_data;
-    gchar *command[] = {"/usr/sbin/rfkill", "block", "wwan", NULL};
+    gchar *command[] = {"/usr/sbin/rfkill", "unblock", "wwan", NULL};
 
     if(g_pcat_modem_manager_data.initialized)
     {
@@ -891,8 +893,10 @@ gboolean pcat_modem_manager_init()
     g_pcat_modem_manager_data.scanning_timeout_id = g_timeout_add_seconds(5,
         pcat_modem_scan_timeout_func, &g_pcat_modem_manager_data);
 
+    /*
     g_timeout_add_seconds(5, pcat_modem_manager_delayed_modem_unblock_func,
         &g_pcat_modem_manager_data);
+    */
 
     g_pcat_modem_manager_data.initialized = TRUE;
 
