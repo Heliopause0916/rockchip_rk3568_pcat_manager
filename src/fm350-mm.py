@@ -92,6 +92,7 @@ class SerialReader:
 def fm350_dial_prepare(sr):
     sr.recv_data_clear()
     sr.send_data("AT+GTFCCLOCKMODE?")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "+GTFCCLOCKMODE: 2" in sbuf or "+GTFCCLOCKMODE: 1" in sbuf:
@@ -102,15 +103,18 @@ def fm350_dial_prepare(sr):
 
         sr.recv_data_clear()
         sr.send_data("AT+CFUN=1,1")
+        time.sleep(1)
 
         return False
 
     sr.recv_data_clear()
     sr.send_data("AT+GTDUALSIM=0")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     sr.recv_data_clear()
     sr.send_data("AT+CPIN?")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "READY" in sbuf:
@@ -132,10 +136,12 @@ def fm350_dial_prepare(sr):
 def fm350_at_dial(sr, pdp_index, apn_str):
     sr.recv_data_clear()
     sr.send_data("AT+COPS=0,0")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout(timeout=5).strip()
 
     sr.recv_data_clear()
     sr.send_data('AT+CGDCONT={0},"IP","{1}"'.format(pdp_index, apn_str))
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
@@ -145,6 +151,7 @@ def fm350_at_dial(sr, pdp_index, apn_str):
 
     sr.recv_data_clear()
     sr.send_data("AT+CGACT=1,{0}".format(pdp_index))
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
@@ -165,6 +172,7 @@ def fm350_at_watch_signal_info(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data("AT+ERAT?")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
     if "OK" in sbuf:
         pos = sbuf.find("+ERAT: ")
@@ -179,6 +187,7 @@ def fm350_at_watch_signal_info(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data("AT+CSQ")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
     if "OK" in sbuf:
         pos = sbuf.find("+CSQ: ")
@@ -196,6 +205,7 @@ def fm350_at_watch_signal_info(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data("AT+CESQ")
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
     if "OK" in sbuf:
         pos = sbuf.find("+CESQ: ")
@@ -244,6 +254,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data('AT+CGPADDR={0}'.format(pdp_index))
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
@@ -273,6 +284,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data('AT+GTDNS={0}'.format(pdp_index))
+    time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
     sbufl1 = sbuf.split("\n")
     strlist = sbufl1[0].strip().split(",")
@@ -456,9 +468,10 @@ def main():
         sr.recv_data_clear()
 
         sr.send_data("AT")
+        time.sleep(1)
         sbuf = sr.recv_data_with_timeout().strip()
 
-        if sbuf == "OK":
+        if "OK" in sbuf:
             serialport = sport
             sphandle = sr
             break
