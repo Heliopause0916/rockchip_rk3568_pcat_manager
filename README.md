@@ -199,7 +199,7 @@ Request:
 Response:
 ```json
 {
-  "command": "pmu-io-set", 
+  "command": "power-on-mode-set", 
   "code": 0
 }
 ```
