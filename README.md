@@ -139,8 +139,6 @@ Response:
 }
 ```
 
-
-
 **modem-network-setup**
 Request:
 ```json
@@ -189,3 +187,42 @@ Response:
   "modem-iface-auto-stop-if-wired": 1
 }
 ```
+**power-on-mode-set**
+Request:
+```json
+{
+  "command": "power-on-mode-set",
+  "mode": 1
+}
+```
+
+Response:
+```json
+{
+  "command": "pmu-io-set", 
+  "code": 0
+}
+```
+
+mode:
+- 1: auto power-on if device powered
+- 0: do nothing if device powered
+
+**power-on-mode-get**
+Request:
+```json
+{
+  "command": "power-on-mode-get"
+}
+```
+
+Response:
+```json
+{
+  "command": "power-on-mode-set", 
+  "code": 0,
+  "mode": 1
+}
+```
+
+

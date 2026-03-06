@@ -24,6 +24,8 @@ void pcat_pmu_manager_status_led_v2_state_set(gboolean state);
 gboolean pcat_pmu_manager_status_led_v2_state_get();
 void pcat_pmu_manager_beeper_state_set(gboolean state);
 gboolean pcat_pmu_manager_beeper_state_get();
+void pcat_pmu_manager_power_on_mode_v2_state_set(gboolean state);
+gboolean pcat_pmu_manager_power_on_mode_v2_state_get();
 
 G_END_DECLS
 

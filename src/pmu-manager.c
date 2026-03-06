@@ -50,6 +50,8 @@ typedef enum
     PCAT_PMU_MANAGER_COMMAND_POWER_ON_EVENT_GET_ACK = 0x1C,
     PCAT_PMU_MANAGER_COMMAND_STATUS_LED_BEEPER_V2_SET = 0x9B,
     PCAT_PMU_MANAGER_COMMAND_STATUS_LED_BEEPER_V2_SET_ACK = 0x9C,
+    PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET = 0xA1,
+    PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET_ACK = 0xA2
 }PCatPMUManagerCommandType;
 
 typedef struct _PCatPMUManagerCommandData
@@ -102,6 +104,7 @@ typedef struct _PCatPMUManagerData
 
     gboolean status_led_v2_state;
     gboolean beeper_state;
+    gboolean power_on_mode_v2_state;
 }PCatPMUManagerData;
 
 static PCatPMUManagerData g_pcat_pmu_manager_data = {0};
@@ -610,6 +613,25 @@ static void pcat_pmu_manager_status_led_beeper_v2_get_interval(
         PCAT_PMU_MANAGER_COMMAND_STATUS_LED_BEEPER_V2_SET, &state, 1, TRUE);
 }
 
+static void pcat_pmu_manager_power_on_mode_v2_set_interval(
+    PCatPMUManagerData *pmu_data, gboolean state)
+{
+    guint8 mode = state ? 0x1 : 0x2;
+
+    pcat_pmu_pm_dev_write_data_request(pmu_data,
+        PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET, &mode, 1, TRUE);
+}
+
+static void pcat_pmu_manager_power_on_mode_v2_get_interval(
+    PCatPMUManagerData *pmu_data)
+{
+    guint8 mode = 0xFF;
+
+    pcat_pmu_pm_dev_write_data_request(pmu_data,
+        PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET, &mode, 1, TRUE);
+}
+
+
 static void pcat_pmu_pm_status_get(PCatPMUManagerData *pmu_data)
 {
     guint battery_voltage = 0, charger_voltage = 0;
@@ -885,6 +907,27 @@ static void pcat_pmu_pm_dev_read_data_parse(PCatPMUManagerData *pmu_data)
                         }
 
                         g_message("PMU IO operation status: %X",
+                            extra_data[0]);
+
+                        break;
+                    }
+                    case PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET_ACK:
+                    {
+                        if(extra_data_len < 1)
+                        {
+                            break;
+                        }
+
+                        if(extra_data[0]==0x82)
+                        {
+                            pmu_data->power_on_mode_v2_state = FALSE;
+                        }
+                        else if(extra_data[0]==0x81)
+                        {
+                            pmu_data->power_on_mode_v2_state = TRUE;
+                        }
+
+                        g_message("Power On mode status: %X",
                             extra_data[0]);
 
                         break;
@@ -1393,6 +1436,8 @@ gboolean pcat_pmu_manager_init()
     pcat_pmu_manager_status_led_beeper_v2_get_interval(
         &g_pcat_pmu_manager_data);
 
+    pcat_pmu_manager_power_on_mode_v2_get_interval(&g_pcat_pmu_manager_data);
+
     return TRUE;
 }
 
@@ -1563,3 +1608,15 @@ gboolean pcat_pmu_manager_beeper_state_get()
     return g_pcat_pmu_manager_data.beeper_state;
 }
 
+void pcat_pmu_manager_power_on_mode_v2_state_set(gboolean state)
+{
+    g_pcat_pmu_manager_data.power_on_mode_v2_state = state;
+
+    pcat_pmu_manager_power_on_mode_v2_set_interval(
+        &g_pcat_pmu_manager_data, state);
+}
+
+gboolean pcat_pmu_manager_power_on_mode_v2_state_get()
+{
+    return g_pcat_pmu_manager_data.power_on_mode_v2_state;
+}
