@@ -219,7 +219,7 @@ Request:
 Response:
 ```json
 {
-  "command": "power-on-mode-set", 
+  "command": "power-on-mode-get", 
   "code": 0,
   "mode": 1
 }
