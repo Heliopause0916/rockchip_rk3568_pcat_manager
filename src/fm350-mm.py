@@ -118,6 +118,10 @@ def fm350_dial_prepare(sr):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "READY" in sbuf:
+        sr.recv_data_clear()
+        sr.send_data("AT+CFUN=1")
+        time.sleep(1)
+        sbuf = sr.recv_data_with_timeout(timeout=5).strip()
         return True
 
     if "ERROR" in sbuf:
