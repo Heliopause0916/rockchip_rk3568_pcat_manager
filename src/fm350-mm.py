@@ -91,6 +91,16 @@ class SerialReader:
 
 def fm350_dial_prepare(sr):
     sr.recv_data_clear()
+    sr.send_data("AT+CFUN=0")
+    time.sleep(5)
+    sbuf = sr.recv_data_with_timeout().strip()
+
+    sr.recv_data_clear()
+    sr.send_data("AT+CFUN=1")
+    time.sleep(5)
+    sbuf = sr.recv_data_with_timeout().strip()
+
+    sr.recv_data_clear()
     sr.send_data("AT+GTFCCLOCKMODE?")
     time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
@@ -118,10 +128,6 @@ def fm350_dial_prepare(sr):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "READY" in sbuf:
-        sr.recv_data_clear()
-        sr.send_data("AT+CFUN=1")
-        time.sleep(1)
-        sbuf = sr.recv_data_with_timeout(timeout=5).strip()
         return True
 
     if "ERROR" in sbuf:
