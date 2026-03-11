@@ -384,7 +384,7 @@ def main():
     global os_is_openwrt
     fm350_usbsysfs_root = ""
     usbsysfs_root = "/sys/bus/usb/devices"
-    pdp_index = 3
+    pdp_index = 0
 
     usbdirs = os.listdir(usbsysfs_root)
     for usbdir in usbdirs:
