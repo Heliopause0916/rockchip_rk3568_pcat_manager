@@ -7,6 +7,7 @@ import serial
 import threading
 import subprocess
 import psutil
+import argparse
 
 os_is_openwrt = False
 
@@ -106,7 +107,8 @@ def fm350_dial_prepare(sr):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "+GTFCCLOCKMODE: 2" in sbuf or "+GTFCCLOCKMODE: 1" in sbuf:
-        print("FCC lock detected, try to unlock and reset modem...")
+        print("FCC lock detected, try to unlock and reset modem...",
+            file=sys.stderr)
         sr.recv_data_clear()
         sr.send_data("AT+GTFCCLOCKMODE=0")
         sbuf = sr.recv_data_with_timeout().strip()
@@ -128,20 +130,24 @@ def fm350_dial_prepare(sr):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if "READY" in sbuf:
+        print("CMD=SIMSTATUS,STATE=2", flush=True)
         return True
 
     if "ERROR" in sbuf:
-        print("Failed to access SIM card: {0}".format(sbuf))
+        print("Failed to access SIM card: {0}".format(sbuf), file=sys.stderr)
+        print("CMD=SIMSTATUS,STATE=6", flush=True)
         return False
 
     if "SIM_PIN" in sbuf:
-        print("SIM card requires PIN code, please unlock card first!")
+        print("SIM card requires PIN code, please unlock card first!",
+            file=sys.stderr)
+        print("CMD=SIMSTATUS,STATE=3", flush=True)
         return False
 
-    print("SIM card error: {0}".format(sbuf))
+    print("SIM card error: {0}".format(sbuf), file=sys.stderr)
+    print("CMD=SIMSTATUS,STATE=6", flush=True)
 
     return False
-
 
 def fm350_at_dial(sr, pdp_index, apn_str):
     sr.recv_data_clear()
@@ -156,7 +162,8 @@ def fm350_at_dial(sr, pdp_index, apn_str):
 
     if not "OK" in sbuf:
         sr.close()
-        print("AT command AT+CGDCONT failed: {0}".format(sbuf))
+        print("AT command AT+CGDCONT failed: {0}".format(sbuf),
+            file=sys.stderr)
         sys.exit(6)
 
     sr.recv_data_clear()
@@ -165,7 +172,7 @@ def fm350_at_dial(sr, pdp_index, apn_str):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
-        print("AT command AT+CGACT failed: {0}".format(sbuf))
+        print("AT command AT+CGACT failed: {0}".format(sbuf), file=sys.stderr)
 
 def fm350_at_watch_signal_info(sr, iface, pdp_index):
     rssi_raw = 99
@@ -252,11 +259,11 @@ def fm350_at_watch_signal_info(sr, iface, pdp_index):
         rsrp = -157 + ss_rsrp_raw
 
     if signal_type >= 2 and signal_type < 7:
-        print("CMD=SIGNALINFO,MODE=WCDMA,RSSI={0}".format(rssi))
+        print("CMD=SIGNALINFO,MODE=WCDMA,RSSI={0}".format(rssi), flush=True)
     elif signal_type >= 7 and signal_type < 10:
-        print("CMD=SIGNALINFO,MODE=LTE,RSSI={0}".format(rssi))
+        print("CMD=SIGNALINFO,MODE=LTE,RSSI={0}".format(rssi), flush=True)
     elif signal_type <= 14:
-        print("CMD=SIGNALINFO,MODE=NR5G-NSA,RSSI={0},RSCP={1},RSRQ={2},RSRP={3}".format(rssi, rscp, rsrq, rsrp))
+        print("CMD=SIGNALINFO,MODE=NR5G-NSA,RSSI={0},RSCP={1},RSRQ={2},RSRP={3}".format(rssi, rscp, rsrq, rsrp), flush=True)
 
 def fm350_at_watch_ipaddr(sr, iface, pdp_index):
     global fm350_ipaddr
@@ -268,7 +275,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
-        print("AT command AT+CGPADDR failed: {0}".format(sbuf))
+        print("AT command AT+CGPADDR failed: {0}".format(sbuf), file=sys.stderr)
         return False
 
     strlist = sbuf.split(",")
@@ -315,7 +322,8 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
     if len(dns1) > 0:
         dnslist.insert(0, dns1)
 
-    print("IP {0}, Netmask {1}, Gateway {2}, DNS {3}".format(ipaddr, netmask, gateway, dnslist))
+    print("IP {0}, Netmask {1}, Gateway {2}, DNS {3}".format(
+        ipaddr, netmask, gateway, dnslist), file=sys.stderr)
 
     if os_is_openwrt:
         result = subprocess.run(
@@ -364,9 +372,9 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
                     os.system("/etc/init.d/firewall restart")
 
             else:
-                print("Cannot parse firewall zone configuration!")
+                print("Cannot parse firewall zone configuration!", file=sys.stderr)
         else:
-            print("Cannot find WAN zone in firewall!")
+            print("Cannot find WAN zone in firewall!", file=sys.stderr)
 
     else:
         os.system("ip addr add {0}/24 dev {1}".format(ipaddr, iface))
@@ -391,6 +399,15 @@ def main():
     fm350_usbsysfs_root = ""
     usbsysfs_root = "/sys/bus/usb/devices"
     pdp_index = 0
+    apn = "cbnet"
+
+    parser = argparse.ArgumentParser(description="FM350 modem manager.")
+    parser.add_argument("-s", '--apn', type=str, default="", help="APN")
+
+    args, unknown = parser.parse_known_args()
+
+    if len(args.apn) > 0:
+        apn = args.apn
 
     usbdirs = os.listdir(usbsysfs_root)
     for usbdir in usbdirs:
@@ -416,11 +433,11 @@ def main():
             break
 
     if len(fm350_usbsysfs_root) == 0:
-        print("No FM350 modem detected!")
+        print("No FM350 modem detected!", file=sys.stderr)
         sys.exit(1)
         return
 
-    print("FM350 modem detected, searching interface and serial port...")
+    print("FM350 modem detected, searching interface and serial port...", file=sys.stderr)
 
     if os.path.isfile("/sbin/uci") or os.path.isfile("/usr/sbin/uci"):
         os_is_openwrt = True
@@ -431,7 +448,7 @@ def main():
             modem_manager_running = True
 
     if modem_manager_running:
-        print("ModemManager detected, stopping service...")
+        print("ModemManager detected, stopping service...", file=sys.stderr)
 
         if os_is_openwrt:
             os.system("/etc/init.d/ModemManager stop")
@@ -460,7 +477,7 @@ def main():
                 serialports.append(os.path.join("/dev", usbsubdir))
 
     if len(iface) == 0 or len(serialports) == 0:
-        print("No serial port or interfaces detected for FM350 modem, please check device driver!")
+        print("No serial port or interfaces detected for FM350 modem, please check device driver!", file=sys.stderr)
         sys.exit(2)
         return
 
@@ -489,17 +506,17 @@ def main():
         sr.close()
 
     if sphandle is not None:
-        print("Interface {0} and serial port {1} detected.".format(iface, serialport))
+        print("Interface {0} and serial port {1} detected.".format(iface, serialport), file=sys.stderr)
     else:
-        print("No serial port available for commands, please check device driver!")
+        print("No serial port available for commands, please check device driver!", file=sys.stderr)
         sys.exit(3)
         return
 
     if not fm350_dial_prepare(sphandle):
-        print("Failed to do preparation for dialout!")
+        print("Failed to do preparation for dialout!", file=sys.stderr)
         sys.exit(4)
 
-    fm350_at_dial(sphandle, pdp_index, "cbnet")
+    fm350_at_dial(sphandle, pdp_index, apn)
     fm350_at_watch(sphandle, iface, pdp_index)
 
 if __name__ == "__main__":
