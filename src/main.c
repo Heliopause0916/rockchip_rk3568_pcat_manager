@@ -39,11 +39,15 @@ const gchar * const g_pcat_main_iface_names[
     "wwan_5g",
     "wwan_5g_v6",
     "wwan_lte",
-    "wwan_lte_v6"
+    "wwan_lte_v6",
+    "wwan_fm350",
+    "wwan_fm350_v6"
 };
 
 const gboolean g_pcat_main_iface_is_ipv6[PCAT_MAIN_IFACE_LAST] =
 {
+    FALSE,
+    TRUE,
     FALSE,
     TRUE,
     FALSE,
@@ -57,6 +61,8 @@ const PCatManagerRouteMode g_pcat_main_iface_route_mode[
 {
     PCAT_MANAGER_ROUTE_MODE_WIRED,
     PCAT_MANAGER_ROUTE_MODE_WIRED,
+    PCAT_MANAGER_ROUTE_MODE_MOBILE,
+    PCAT_MANAGER_ROUTE_MODE_MOBILE,
     PCAT_MANAGER_ROUTE_MODE_MOBILE,
     PCAT_MANAGER_ROUTE_MODE_MOBILE,
     PCAT_MANAGER_ROUTE_MODE_MOBILE,
