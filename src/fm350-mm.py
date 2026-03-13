@@ -336,6 +336,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
         os.system("uci set network.{0}.metric=14".format(fm350_openwrt_interface_name))
         os.system("uci set network.{0}.ifname={1}".format(fm350_openwrt_interface_name, iface))
         os.system("uci set network.{0}.device={1}".format(fm350_openwrt_interface_name, iface))
+        os.system("uci set network.{0}.auto=0".format(fm350_openwrt_interface_name))
 
         os.system("uci set network.{0}.ipaddr='{1}'".format(fm350_openwrt_interface_name, ipaddr))
         os.system("uci set network.{0}.netmask='{1}'".format(fm350_openwrt_interface_name, netmask))
