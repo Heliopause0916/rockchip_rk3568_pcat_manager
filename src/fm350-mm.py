@@ -156,7 +156,7 @@ def fm350_at_dial(sr, pdp_index, apn_str):
     sbuf = sr.recv_data_with_timeout(timeout=5).strip()
 
     sr.recv_data_clear()
-    sr.send_data('AT+CGDCONT={0},"IP","{1}"'.format(pdp_index, apn_str))
+    sr.send_data('AT+CGDCONT={0},"IPV4V6","{1}"'.format(pdp_index, apn_str))
     time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
