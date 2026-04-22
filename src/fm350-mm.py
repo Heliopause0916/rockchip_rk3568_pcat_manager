@@ -675,4 +675,31 @@ def main():
     fm350_at_watch(sphandle, iface, active_pdp)
 
 if __name__ == "__main__":
-    main()
+    # Retry the whole process up to 10 times. Some roaming networks (and
+    # the FM350's own state machine) need a few CFUN cycles and fresh
+    # serial-port opens before the PDP context activates. Re-exec rather
+    # than looping in-process so each attempt starts from a clean slate.
+    retry_flag = "--_retry"
+    attempt = 1
+    for i, a in enumerate(sys.argv):
+        if a.startswith(retry_flag + "="):
+            try:
+                attempt = int(a.split("=", 1)[1])
+            except ValueError:
+                attempt = 1
+            sys.argv.pop(i)
+            break
+
+    max_attempts = 10
+    try:
+        main()
+        sys.exit(0)
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 1
+        if code == 0 or attempt >= max_attempts:
+            sys.exit(code)
+        print("Attempt {0}/{1} failed with exit code {2}, retrying in 10s...".format(
+            attempt, max_attempts, code), file=sys.stderr)
+        time.sleep(10)
+        os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0]),
+            "{0}={1}".format(retry_flag, attempt + 1)] + sys.argv[1:])
