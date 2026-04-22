@@ -92,13 +92,18 @@ class SerialReader:
 
 def fm350_dial_prepare(sr):
     sr.recv_data_clear()
+    sr.send_data("AT+CMEE=2")
+    time.sleep(1)
+    sbuf = sr.recv_data_with_timeout().strip()
+
+    sr.recv_data_clear()
     sr.send_data("AT+CFUN=0")
     time.sleep(5)
     sbuf = sr.recv_data_with_timeout().strip()
 
     sr.recv_data_clear()
     sr.send_data("AT+CFUN=1")
-    time.sleep(5)
+    time.sleep(10)
     sbuf = sr.recv_data_with_timeout().strip()
 
     sr.recv_data_clear()
@@ -149,30 +154,179 @@ def fm350_dial_prepare(sr):
 
     return False
 
-def fm350_at_dial(sr, pdp_index, apn_str):
-    sr.recv_data_clear()
-    sr.send_data("AT+COPS=0,0")
-    time.sleep(1)
-    sbuf = sr.recv_data_with_timeout(timeout=5).strip()
+def fm350_parse_reg_state(sbuf, prefix):
+    pos = sbuf.find(prefix)
+    if pos < 0:
+        return -1
+    inforaw = sbuf[pos + len(prefix):]
+    infolist = inforaw.split(",")
+    if len(infolist) < 2:
+        return -1
+    try:
+        return int(infolist[1].strip().split("\r")[0].split("\n")[0])
+    except:
+        return -1
 
+
+def fm350_wait_registration(sr, timeout=90):
+    for cmd in ("AT+CREG=2", "AT+CGREG=2", "AT+CEREG=2"):
+        sr.recv_data_clear()
+        sr.send_data(cmd)
+        time.sleep(0.5)
+        sr.recv_data_with_timeout()
+
+    last_oper = ""
+    eps_state = -1
+    gprs_state = -1
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        sr.recv_data_clear()
+        sr.send_data("AT+CEREG?")
+        time.sleep(0.5)
+        sbuf = sr.recv_data_with_timeout().strip()
+        eps_state = fm350_parse_reg_state(sbuf, "+CEREG: ")
+
+        sr.recv_data_clear()
+        sr.send_data("AT+CGREG?")
+        time.sleep(0.5)
+        sbuf = sr.recv_data_with_timeout().strip()
+        gprs_state = fm350_parse_reg_state(sbuf, "+CGREG: ")
+
+        if eps_state in (1, 5) or gprs_state in (1, 5):
+            state = eps_state if eps_state in (1, 5) else gprs_state
+
+            sr.recv_data_clear()
+            sr.send_data("AT+COPS?")
+            time.sleep(0.5)
+            sbuf = sr.recv_data_with_timeout().strip()
+            pos = sbuf.find("+COPS: ")
+            if pos >= 0:
+                parts = sbuf[pos + 7:].split(",")
+                if len(parts) >= 3:
+                    last_oper = parts[2].strip().strip('"')
+
+            roaming = "YES" if state == 5 else "NO"
+            print("Registered on network '{0}' (roaming={1})".format(
+                last_oper, roaming), file=sys.stderr)
+            print("CMD=REGSTATUS,STATE={0},OPER={1},ROAMING={2}".format(
+                state, last_oper, roaming), flush=True)
+            return True
+
+        sr.recv_data_clear()
+        sr.send_data("AT+CSQ")
+        time.sleep(0.3)
+        csq = sr.recv_data_with_timeout().strip()
+        csq_short = "n/a"
+        pos = csq.find("+CSQ: ")
+        if pos >= 0:
+            csq_short = csq[pos + 6:].split("\r")[0].split("\n")[0].strip()
+        print("Waiting for registration (EPS={0}, GPRS={1}, CSQ={2})".format(
+            eps_state, gprs_state, csq_short), file=sys.stderr)
+
+        time.sleep(3)
+
+    print("Timed out waiting for network registration (EPS={0}, GPRS={1})".format(
+        eps_state, gprs_state), file=sys.stderr)
+    return False
+
+
+def fm350_try_cgdcont(sr, pdp_index, apn_str, pdp_type):
     sr.recv_data_clear()
-    sr.send_data('AT+CGDCONT={0},"IPV4V6","{1}"'.format(pdp_index, apn_str))
+    sr.send_data('AT+CGDCONT={0},"{1}","{2}"'.format(pdp_index, pdp_type, apn_str))
     time.sleep(1)
     sbuf = sr.recv_data_with_timeout().strip()
 
-    if not "OK" in sbuf:
-        sr.close()
-        print("AT command AT+CGDCONT failed: {0}".format(sbuf),
+    if "OK" not in sbuf:
+        print("AT+CGDCONT ({0}) failed: {1}".format(pdp_type, sbuf),
             file=sys.stderr)
-        sys.exit(6)
+        return False
 
     sr.recv_data_clear()
     sr.send_data("AT+CGACT=1,{0}".format(pdp_index))
     time.sleep(1)
-    sbuf = sr.recv_data_with_timeout().strip()
+    sbuf = sr.recv_data_with_timeout(timeout=30).strip()
 
-    if not "OK" in sbuf:
-        print("AT command AT+CGACT failed: {0}".format(sbuf), file=sys.stderr)
+    if "OK" in sbuf:
+        return True
+
+    print("AT+CGACT with PDP type {0} failed: {1}".format(pdp_type, sbuf),
+        file=sys.stderr)
+
+    sr.recv_data_clear()
+    sr.send_data("AT+CGACT=0,{0}".format(pdp_index))
+    time.sleep(1)
+    sr.recv_data_with_timeout()
+    return False
+
+
+def fm350_at_dial(sr, pdp_index, apn_str):
+    for cmd in ("AT+CREG=2", "AT+CGREG=2", "AT+CEREG=2"):
+        sr.recv_data_clear()
+        sr.send_data(cmd)
+        time.sleep(0.3)
+        sr.recv_data_with_timeout()
+
+    sr.recv_data_clear()
+    sr.send_data("AT+CEREG?")
+    time.sleep(0.5)
+    sbuf = sr.recv_data_with_timeout().strip()
+    eps_state = fm350_parse_reg_state(sbuf, "+CEREG: ")
+
+    if eps_state not in (1, 5):
+        sr.recv_data_clear()
+        sr.send_data("AT+COPS=0")
+        time.sleep(1)
+        sbuf = sr.recv_data_with_timeout(timeout=10).strip()
+        if "ERROR" in sbuf:
+            print("AT+COPS=0 returned: {0} (continuing, modem may still register)".format(
+                sbuf.replace("\r", " ").replace("\n", " ")), file=sys.stderr)
+
+    if not fm350_wait_registration(sr, timeout=90):
+        sr.close()
+        print("Network registration failed, giving up.", file=sys.stderr)
+        sys.exit(6)
+
+    # Some roaming networks reject the first AT+CGACT=1,0 right after CFUN=1
+    # (returning CME 5873) and only accept a retry a few seconds later.
+    # AT+CGACT=1,0 is what opens the data pipe to the net interface, so it
+    # must succeed — merely reading AT+CGPADDR=0 is not enough because the
+    # address may be reported for a bearer that is not yet forwarding data.
+    last_err = ""
+    for attempt in range(6):
+        sr.recv_data_clear()
+        sr.send_data("AT+CGACT=1,0")
+        time.sleep(1)
+        sbuf = sr.recv_data_with_timeout(timeout=30).strip()
+        if "OK" in sbuf:
+            print("PDP context 0 (initial, operator-assigned APN) activated (attempt {0})".format(
+                attempt + 1), file=sys.stderr)
+            return 0
+
+        last_err = sbuf.replace("\r", " ").replace("\n", " ")
+        print("Initial PDP context (0) activation attempt {0} failed: {1}".format(
+            attempt + 1, last_err), file=sys.stderr)
+
+        # Cycle the context explicitly before retrying; roaming networks
+        # sometimes need an explicit deactivate to clear the failed state.
+        sr.recv_data_clear()
+        sr.send_data("AT+CGACT=0,0")
+        time.sleep(1)
+        sr.recv_data_with_timeout()
+        time.sleep(5)
+
+    print("Initial PDP context (0) activation failed after retries: {0}".format(
+        last_err), file=sys.stderr)
+
+    for pdp_type in ("IP", "IPV4V6", "IPV6"):
+        if fm350_try_cgdcont(sr, pdp_index, apn_str, pdp_type):
+            print("PDP context {0} activated with type {1}".format(
+                pdp_index, pdp_type), file=sys.stderr)
+            return pdp_index
+
+    sr.close()
+    print("All PDP activation attempts failed (tried IP, IPV4V6, IPV6).",
+        file=sys.stderr)
+    sys.exit(6)
 
 def fm350_at_watch_signal_info(sr, iface, pdp_index):
     rssi_raw = 99
@@ -399,7 +553,7 @@ def main():
     global os_is_openwrt
     fm350_usbsysfs_root = ""
     usbsysfs_root = "/sys/bus/usb/devices"
-    pdp_index = 0
+    pdp_index = 1
     apn = "cbnet"
 
     parser = argparse.ArgumentParser(description="FM350 modem manager.")
@@ -517,8 +671,8 @@ def main():
         print("Failed to do preparation for dialout!", file=sys.stderr)
         sys.exit(4)
 
-    fm350_at_dial(sphandle, pdp_index, apn)
-    fm350_at_watch(sphandle, iface, pdp_index)
+    active_pdp = fm350_at_dial(sphandle, pdp_index, apn)
+    fm350_at_watch(sphandle, iface, active_pdp)
 
 if __name__ == "__main__":
     main()
