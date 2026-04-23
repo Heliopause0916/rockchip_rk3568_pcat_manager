@@ -241,25 +241,12 @@ def fm350_try_cgdcont(sr, pdp_index, apn_str, pdp_type):
             file=sys.stderr)
         return False
 
-    sr.recv_data_clear()
-    sr.send_data("AT+CGACT=1,{0}".format(pdp_index))
-    time.sleep(1)
-    sbuf = sr.recv_data_with_timeout(timeout=30).strip()
-
-    if "OK" in sbuf:
-        return True
-
-    print("AT+CGACT with PDP type {0} failed: {1}".format(pdp_type, sbuf),
-        file=sys.stderr)
-
-    sr.recv_data_clear()
-    sr.send_data("AT+CGACT=0,{0}".format(pdp_index))
-    time.sleep(1)
-    sr.recv_data_with_timeout()
-    return False
+    return True
 
 
 def fm350_at_dial(sr, pdp_index, apn_str):
+    cgdcont_flag = False
+
     for cmd in ("AT+CREG=2", "AT+CGREG=2", "AT+CEREG=2"):
         sr.recv_data_clear()
         sr.send_data(cmd)
@@ -281,10 +268,25 @@ def fm350_at_dial(sr, pdp_index, apn_str):
             print("AT+COPS=0 returned: {0} (continuing, modem may still register)".format(
                 sbuf.replace("\r", " ").replace("\n", " ")), file=sys.stderr)
 
+            return False
+
     if not fm350_wait_registration(sr, timeout=90):
         sr.close()
         print("Network registration failed, giving up.", file=sys.stderr)
-        sys.exit(6)
+        return False
+
+    for pdp_type in ("IPV4V6", "IP", "IPV6"):
+        if fm350_try_cgdcont(sr, pdp_index, apn_str, pdp_type):
+            print("PDP context {0} activated with type {1}".format(
+                pdp_index, pdp_type), file=sys.stderr)
+            cgdcont_flag = True
+            break
+
+    if not cgdcont_flag:
+        print("All PDP activation attempts failed (tried IP, IPV4V6, IPV6).",
+            file=sys.stderr)
+
+        return False
 
     # Some roaming networks reject the first AT+CGACT=1,0 right after CFUN=1
     # (returning CME 5873) and only accept a retry a few seconds later.
@@ -294,13 +296,13 @@ def fm350_at_dial(sr, pdp_index, apn_str):
     last_err = ""
     for attempt in range(6):
         sr.recv_data_clear()
-        sr.send_data("AT+CGACT=1,0")
+        sr.send_data("AT+CGACT=1,{0}".format(pdp_index))
         time.sleep(1)
         sbuf = sr.recv_data_with_timeout(timeout=30).strip()
         if "OK" in sbuf:
             print("PDP context 0 (initial, operator-assigned APN) activated (attempt {0})".format(
                 attempt + 1), file=sys.stderr)
-            return 0
+            return True
 
         last_err = sbuf.replace("\r", " ").replace("\n", " ")
         print("Initial PDP context (0) activation attempt {0} failed: {1}".format(
@@ -309,24 +311,13 @@ def fm350_at_dial(sr, pdp_index, apn_str):
         # Cycle the context explicitly before retrying; roaming networks
         # sometimes need an explicit deactivate to clear the failed state.
         sr.recv_data_clear()
-        sr.send_data("AT+CGACT=0,0")
+        sr.send_data("AT+CGACT=0,{0}".format(pdp_index))
         time.sleep(1)
         sr.recv_data_with_timeout()
-        time.sleep(5)
+        time.sleep(6)
 
-    print("Initial PDP context (0) activation failed after retries: {0}".format(
-        last_err), file=sys.stderr)
+    return False
 
-    for pdp_type in ("IP", "IPV4V6", "IPV6"):
-        if fm350_try_cgdcont(sr, pdp_index, apn_str, pdp_type):
-            print("PDP context {0} activated with type {1}".format(
-                pdp_index, pdp_type), file=sys.stderr)
-            return pdp_index
-
-    sr.close()
-    print("All PDP activation attempts failed (tried IP, IPV4V6, IPV6).",
-        file=sys.stderr)
-    sys.exit(6)
 
 def fm350_at_watch_signal_info(sr, iface, pdp_index):
     rssi_raw = 99
@@ -553,7 +544,7 @@ def main():
     global os_is_openwrt
     fm350_usbsysfs_root = ""
     usbsysfs_root = "/sys/bus/usb/devices"
-    pdp_index = 1
+    pdp_index = 0
     apn = "cbnet"
 
     parser = argparse.ArgumentParser(description="FM350 modem manager.")
@@ -671,8 +662,10 @@ def main():
         print("Failed to do preparation for dialout!", file=sys.stderr)
         sys.exit(4)
 
-    active_pdp = fm350_at_dial(sphandle, pdp_index, apn)
-    fm350_at_watch(sphandle, iface, active_pdp)
+    if not fm350_at_dial(sphandle, pdp_index, apn):
+        sys.exit(5)
+
+    fm350_at_watch(sphandle, iface, pdp_index)
 
 if __name__ == "__main__":
     # Retry the whole process up to 10 times. Some roaming networks (and
