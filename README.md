@@ -225,4 +225,36 @@ Response:
 }
 ```
 
+**charge-threshold-set**
+Request:
+```json
+{
+  "command": "charge-threshold-set",
+  "value": 80
+}
+```
 
+Response:
+```json
+{
+  "command": "charge-threshold-set", 
+  "code": 0
+}
+```
+
+**charge-threshold-get**
+Request:
+```json
+{
+  "command": "charge-threshold-get"
+}
+```
+
+Response:
+```json
+{
+  "command": "charge-threshold-get", 
+  "code": 0,
+  "value": 80
+}
+```

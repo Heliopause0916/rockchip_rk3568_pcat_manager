@@ -1321,6 +1321,60 @@ static void pcat_controller_command_power_on_mode_get_func(
     json_object_put(rroot);
 }
 
+static void pcat_controller_command_charge_threshold_set_func(
+    PCatControllerData *ctrl_data,
+    PCatControllerConnectionData *connection_data,
+    const gchar *command, struct json_object *root)
+{
+    struct json_object *rroot, *child;
+    guint value = 100;
+
+    if(json_object_object_get_ex(root, "value", &child))
+    {
+        value = (json_object_get_int(child)!=0);
+    }
+
+    rroot = json_object_new_object();
+
+    child = json_object_new_string(command);
+    json_object_object_add(rroot, "command", child);
+
+    child = json_object_new_int(0);
+    json_object_object_add(rroot, "code", child);
+
+    pcat_controller_unix_socket_output_json_push(ctrl_data, connection_data,
+        rroot);
+    json_object_put(rroot);
+
+    pcat_pmu_manager_charge_threshold_set(value);
+}
+
+static void pcat_controller_command_charge_threshold_get_func(
+    PCatControllerData *ctrl_data,
+    PCatControllerConnectionData *connection_data,
+    const gchar *command, struct json_object *root)
+{
+    struct json_object *rroot, *child;
+    guint value;
+
+    value = pcat_pmu_manager_charge_threshold_get();
+
+    rroot = json_object_new_object();
+
+    child = json_object_new_string(command);
+    json_object_object_add(rroot, "command", child);
+
+    child = json_object_new_int(0);
+    json_object_object_add(rroot, "code", child);
+
+    child = json_object_new_int(value);
+    json_object_object_add(rroot, "value", child);
+
+    pcat_controller_unix_socket_output_json_push(ctrl_data, connection_data,
+        rroot);
+    json_object_put(rroot);
+}
+
 static PCatControllerCommandData g_pcat_controller_command_list[] =
 {
     {
@@ -1383,7 +1437,14 @@ static PCatControllerCommandData g_pcat_controller_command_list[] =
         .command = "power-on-mode-get",
         .callback = pcat_controller_command_power_on_mode_get_func,
     },
-
+    {
+        .command = "charge-threshold-set",
+        .callback = pcat_controller_command_charge_threshold_set_func,
+    },
+    {
+        .command = "charge-threshold-get",
+        .callback = pcat_controller_command_charge_threshold_get_func,
+    },
     { NULL, NULL }
 };
 

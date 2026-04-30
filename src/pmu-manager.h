@@ -26,6 +26,8 @@ void pcat_pmu_manager_beeper_state_set(gboolean state);
 gboolean pcat_pmu_manager_beeper_state_get();
 void pcat_pmu_manager_power_on_mode_v2_state_set(gboolean state);
 gboolean pcat_pmu_manager_power_on_mode_v2_state_get();
+void pcat_pmu_manager_charge_threshold_set(guint threshold);
+guint pcat_pmu_manager_charge_threshold_get();
 
 G_END_DECLS
 

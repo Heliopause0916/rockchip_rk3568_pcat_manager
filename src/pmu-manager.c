@@ -51,7 +51,11 @@ typedef enum
     PCAT_PMU_MANAGER_COMMAND_STATUS_LED_BEEPER_V2_SET = 0x9B,
     PCAT_PMU_MANAGER_COMMAND_STATUS_LED_BEEPER_V2_SET_ACK = 0x9C,
     PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET = 0xA1,
-    PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET_ACK = 0xA2
+    PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET_ACK = 0xA2,
+    PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_SET = 0xA5,
+    PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_SET_ACK = 0xA6,
+    PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_GET = 0xA7,
+    PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_GET_ACK = 0xA8,
 }PCatPMUManagerCommandType;
 
 typedef struct _PCatPMUManagerCommandData
@@ -105,6 +109,7 @@ typedef struct _PCatPMUManagerData
     gboolean status_led_v2_state;
     gboolean beeper_state;
     gboolean power_on_mode_v2_state;
+    guint charge_threshold;
 }PCatPMUManagerData;
 
 static PCatPMUManagerData g_pcat_pmu_manager_data = {0};
@@ -631,6 +636,34 @@ static void pcat_pmu_manager_power_on_mode_v2_get_interval(
         PCAT_PMU_MANAGER_COMMAND_POWER_ON_MODE_V2_SET, &mode, 1, TRUE);
 }
 
+static void pcat_pmu_manager_charge_threshold_set_interval(
+    PCatPMUManagerData *pmu_data, guint threshold)
+{
+    guint8 value;
+
+    if(threshold < 50)
+    {
+        value = 50;
+    }
+    else if(threshold > 100)
+    {
+        value = 100;
+    }
+    else
+    {
+        value = threshold;
+    }
+
+    pcat_pmu_pm_dev_write_data_request(pmu_data,
+        PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_SET, &value, 1, TRUE);
+}
+
+static void pcat_pmu_manager_charge_threshold_get_interval(
+    PCatPMUManagerData *pmu_data)
+{
+    pcat_pmu_pm_dev_write_data_request(pmu_data,
+        PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_GET, NULL, 0, TRUE);
+}
 
 static void pcat_pmu_pm_status_get(PCatPMUManagerData *pmu_data)
 {
@@ -928,6 +961,23 @@ static void pcat_pmu_pm_dev_read_data_parse(PCatPMUManagerData *pmu_data)
                         }
 
                         g_message("Power On mode status: %X",
+                            extra_data[0]);
+
+                        break;
+                    }
+                    case PCAT_PMU_MANAGER_COMMAND_CHARGE_THRESHOLD_GET_ACK:
+                    {
+                        if(extra_data_len < 1)
+                        {
+                            break;
+                        }
+
+                        if(extra_data[0] >= 50 && extra_data[0] <= 100)
+                        {
+                            pmu_data->charge_threshold = extra_data[0];
+                        }
+
+                        g_message("Get charge threshold: %u",
                             extra_data[0]);
 
                         break;
@@ -1302,7 +1352,7 @@ gboolean pcat_pmu_manager_init()
     g_pcat_pmu_manager_data.dev_write_current_command_data = NULL;
     g_pcat_pmu_manager_data.status_led_v2_state = TRUE;
     g_pcat_pmu_manager_data.beeper_state = TRUE;
-
+    g_pcat_pmu_manager_data.charge_threshold = 100;
 
     if(!pcat_pmu_pm_dev_open(&g_pcat_pmu_manager_data))
     {
@@ -1425,18 +1475,14 @@ gboolean pcat_pmu_manager_init()
 
     pcat_pmu_manager_charger_on_auto_start_internal(&g_pcat_pmu_manager_data,
         uconfig_data->charger_on_auto_start);
-
     pcat_pmu_manager_voltage_threshold_set_interval(&g_pcat_pmu_manager_data,
         0, 0, 0, 0, 0, config_data->pm_auto_shutdown_voltage_general, 0, 0);
-
     pcat_pmu_manager_pmu_fw_version_get_internal(&g_pcat_pmu_manager_data);
-
     pcat_pmu_manager_power_on_event_get_internal(&g_pcat_pmu_manager_data);
-
     pcat_pmu_manager_status_led_beeper_v2_get_interval(
         &g_pcat_pmu_manager_data);
-
     pcat_pmu_manager_power_on_mode_v2_get_interval(&g_pcat_pmu_manager_data);
+    pcat_pmu_manager_charge_threshold_get_interval(&g_pcat_pmu_manager_data);
 
     return TRUE;
 }
@@ -1619,4 +1665,17 @@ void pcat_pmu_manager_power_on_mode_v2_state_set(gboolean state)
 gboolean pcat_pmu_manager_power_on_mode_v2_state_get()
 {
     return g_pcat_pmu_manager_data.power_on_mode_v2_state;
+}
+
+void pcat_pmu_manager_charge_threshold_set(guint threshold)
+{
+    g_pcat_pmu_manager_data.charge_threshold = threshold;
+
+    pcat_pmu_manager_charge_threshold_set_interval(
+        &g_pcat_pmu_manager_data, threshold);
+}
+
+guint pcat_pmu_manager_charge_threshold_get()
+{
+    return g_pcat_pmu_manager_data.charge_threshold;
 }
