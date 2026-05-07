@@ -1331,7 +1331,7 @@ static void pcat_controller_command_charge_threshold_set_func(
 
     if(json_object_object_get_ex(root, "value", &child))
     {
-        value = (json_object_get_int(child)!=0);
+        value = json_object_get_int(child);
     }
 
     rroot = json_object_new_object();
