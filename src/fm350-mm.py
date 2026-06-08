@@ -39,7 +39,7 @@ class SerialReader:
 
         while self.running:
             if self.ser.in_waiting > 0:
-                data = self.ser.readall().decode('utf-8')
+                data = self.ser.readall().decode('utf-8', errors='replace')
 
                 with self.rbuffer_lock:
                     if len(self.rbuffer) > 1048576:
@@ -416,7 +416,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data('AT+CGPADDR={0}'.format(pdp_index))
-    time.sleep(1)
+    time.sleep(3)
     sbuf = sr.recv_data_with_timeout().strip()
 
     if not "OK" in sbuf:
@@ -446,7 +446,7 @@ def fm350_at_watch_ipaddr(sr, iface, pdp_index):
 
     sr.recv_data_clear()
     sr.send_data('AT+GTDNS={0}'.format(pdp_index))
-    time.sleep(1)
+    time.sleep(3)
     sbuf = sr.recv_data_with_timeout().strip()
     sbufl1 = sbuf.split("\n")
     strlist = sbufl1[0].strip().split(",")
