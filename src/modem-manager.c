@@ -212,6 +212,7 @@ static inline gboolean pcat_modem_manager_modem_power_init(
     PCatModemManagerData *mm_data, PCatManagerMainConfigData *main_config_data)
 {
     guint i;
+    gint saved_errno;
 
     g_message("Start Modem power initialization.");
 
@@ -269,32 +270,61 @@ static inline gboolean pcat_modem_manager_modem_power_init(
 
     if(mm_data->gpio_modem_power_line==NULL)
     {
+        errno = 0;
         mm_data->gpio_modem_power_line = pcat_gpiod_request_output_one(
             mm_data->gpio_modem_power_chip,
             main_config_data->hw_gpio_modem_power_line,
             "gpio-modem-power",
             main_config_data->hw_gpio_modem_power_active_low ? 1 : 0);
+        saved_errno = errno;
         if(mm_data->gpio_modem_power_line==NULL)
         {
-            g_warning("Failed to request Modem power GPIO line!");
+            if(saved_errno==EBUSY)
+            {
+                g_info("Modem power GPIO line %u on chip %s is already "
+                    "held by another consumer, treated as externally "
+                    "managed, skip direct control.",
+                    main_config_data->hw_gpio_modem_power_line,
+                    main_config_data->hw_gpio_modem_power_chip);
+            }
+            else
+            {
+                g_warning("Failed to request Modem power GPIO line!");
 
-            return FALSE;
+                return FALSE;
+            }
         }
-        mm_data->gpio_modem_power_line_num =
-            main_config_data->hw_gpio_modem_power_line;
+        else
+        {
+            mm_data->gpio_modem_power_line_num =
+                main_config_data->hw_gpio_modem_power_line;
+        }
     }
 
     if(mm_data->gpio_modem_rf_kill_line==NULL &&
         mm_data->gpio_modem_rf_kill_chip!=NULL)
     {
+        errno = 0;
         mm_data->gpio_modem_rf_kill_line = pcat_gpiod_request_output_one(
             mm_data->gpio_modem_rf_kill_chip,
             main_config_data->hw_gpio_modem_rf_kill_line,
             "gpio-modem-rf-kill",
             main_config_data->hw_gpio_modem_rf_kill_active_low ? 0 : 1);
+        saved_errno = errno;
         if(mm_data->gpio_modem_rf_kill_line==NULL)
         {
-            g_warning("Failed to request Modem RF kill GPIO line!");
+            if(saved_errno==EBUSY)
+            {
+                g_info("Modem RF kill GPIO line %u on chip %s is already "
+                    "held by another consumer, treated as externally "
+                    "managed, skip direct control.",
+                    main_config_data->hw_gpio_modem_rf_kill_line,
+                    main_config_data->hw_gpio_modem_rf_kill_chip);
+            }
+            else
+            {
+                g_warning("Failed to request Modem RF kill GPIO line!");
+            }
         }
         else
         {
@@ -305,19 +335,35 @@ static inline gboolean pcat_modem_manager_modem_power_init(
 
     if(mm_data->gpio_modem_reset_line==NULL)
     {
+        errno = 0;
         mm_data->gpio_modem_reset_line = pcat_gpiod_request_output_one(
             mm_data->gpio_modem_reset_chip,
             main_config_data->hw_gpio_modem_reset_line,
             "gpio-modem-reset",
             main_config_data->hw_gpio_modem_reset_active_low ? 1 : 0);
+        saved_errno = errno;
         if(mm_data->gpio_modem_reset_line==NULL)
         {
-            g_warning("Failed to request Modem reset GPIO line!");
+            if(saved_errno==EBUSY)
+            {
+                g_info("Modem reset GPIO line %u on chip %s is already "
+                    "held by another consumer, treated as externally "
+                    "managed, skip direct control.",
+                    main_config_data->hw_gpio_modem_reset_line,
+                    main_config_data->hw_gpio_modem_reset_chip);
+            }
+            else
+            {
+                g_warning("Failed to request Modem reset GPIO line!");
 
-            return FALSE;
+                return FALSE;
+            }
         }
-        mm_data->gpio_modem_reset_line_num =
-            main_config_data->hw_gpio_modem_reset_line;
+        else
+        {
+            mm_data->gpio_modem_reset_line_num =
+                main_config_data->hw_gpio_modem_reset_line;
+        }
     }
 
     for(i=0;i<PCAT_MODEM_MANAGER_POWER_WAIT_TIME && mm_data->work_flag;i++)
@@ -942,9 +988,15 @@ static gpointer pcat_modem_manager_modem_work_thread_func(
         {
             case PCAT_MODEM_MANAGER_STATE_NONE:
             {
-                pcat_modem_manager_modem_power_init(mm_data,
-                    main_config_data);
-                mm_data->state = PCAT_MODEM_MANAGER_STATE_READY;
+                if(pcat_modem_manager_modem_power_init(mm_data,
+                    main_config_data))
+                {
+                    mm_data->state = PCAT_MODEM_MANAGER_STATE_READY;
+                }
+                else
+                {
+                    g_usleep(100000);
+                }
 
                 break;
             }
