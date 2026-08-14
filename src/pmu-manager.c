@@ -929,6 +929,7 @@ static void pcat_pmu_serial_status_data_parse(PCatPMUManagerData *pmu_data,
         fclose(fp);
     }
 
+    /* 保留：旧内核 v1 依赖 /dev/fake_battery 上报电池状态 */
     fp = fopen(PCAT_PMU_MANAGER_FAKE_BATTERY_DEV, "w");
     if(fp!=NULL)
     {
@@ -1355,19 +1356,7 @@ static void pcat_pmu_sysfs_write_battery_state(guint percentage,
         fclose(fp);
     }
 
-    fp = fopen(PCAT_PMU_MANAGER_FAKE_BATTERY_DEV, "w");
-    if(fp!=NULL)
-    {
-        fprintf(fp, on_battery ? "charging = 0\n" : "charging = 1\n");
-        fclose(fp);
-    }
-
-    fp = fopen(PCAT_PMU_MANAGER_FAKE_BATTERY_DEV, "w");
-    if(fp!=NULL)
-    {
-        fprintf(fp, "capacity0 = %u\n", percentage);
-        fclose(fp);
-    }
+    /* 已移除对 /dev/fake_battery 的写入（新内核无 fake_battery，属死代码） */
 }
 
 static void pcat_pmu_sysfs_telemetry_update(PCatPMUManagerData *pmu_data)
@@ -1465,7 +1454,7 @@ static void pcat_pmu_sysfs_telemetry_update(PCatPMUManagerData *pmu_data)
     temp_c = pcat_pmu_sysfs_board_temp_get();
     pmu_data->board_temp = temp_c;
 
-    /* 副作用与原 0x7 解析保持一致：写 statefs 与 fake_battery */
+    /* 副作用与原 0x7 解析保持一致：写 statefs（已移除 fake_battery 写入） */
     pcat_pmu_sysfs_write_battery_state(
         pmu_data->last_battery_percentage / 100,
         pmu_data->last_battery_voltage, on_battery);
