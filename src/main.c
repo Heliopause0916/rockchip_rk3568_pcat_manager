@@ -58,6 +58,11 @@ static const guint g_pcat_main_shutdown_wait_max = 30;
 
 static gboolean g_pcat_main_cmd_daemonsize = FALSE;
 static gboolean g_pcat_main_cmd_distro = FALSE;
+static gchar *g_pcat_main_cmd_mode = NULL;
+static gboolean g_pcat_main_cmd_ctl = FALSE;
+
+static PCatManagerTransport g_pcat_main_transport_mode =
+    PCAT_MANAGER_TRANSPORT_SERIAL;
 
 static GMainLoop *g_pcat_main_loop = NULL;
 static gboolean g_pcat_main_shutdown = FALSE;
@@ -89,6 +94,11 @@ static GOptionEntry g_pcat_cmd_entries[] =
         "Run as a daemon", NULL },
     { "distro", 0, 0, G_OPTION_ARG_NONE, &g_pcat_main_cmd_distro,
         "Run this program on normal Linux distros (not OpenWRT)", NULL },
+    { "mode", 0, 0, G_OPTION_ARG_STRING, &g_pcat_main_cmd_mode,
+        "PMU transport mode: kernel|ctl (new kernel via /dev/pcat-pm-ctl) "
+        "or serial (old kernel via /dev/ttyS4)", "<mode>" },
+    { "ctl", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &g_pcat_main_cmd_ctl,
+        "Compatibility alias: force kernel(ctl) transport mode", NULL },
     { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
 };
 
@@ -96,6 +106,9 @@ static void pcat_main_config_data_clear()
 {
     g_free(g_pcat_main_config_data.pm_serial_device);
     g_pcat_main_config_data.pm_serial_device = NULL;
+
+    g_free(g_pcat_main_config_data.pm_control_device);
+    g_pcat_main_config_data.pm_control_device = NULL;
 
     g_pcat_main_config_data.valid = FALSE;
 }
@@ -235,6 +248,20 @@ static gboolean pcat_main_config_data_load()
     g_pcat_main_config_data.pm_serial_device = g_key_file_get_string(
         keyfile, "PowerManager", "SerialDevice", NULL);
 
+    if(g_pcat_main_config_data.pm_control_device!=NULL)
+    {
+        g_free(g_pcat_main_config_data.pm_control_device);
+    }
+    g_pcat_main_config_data.pm_control_device = g_key_file_get_string(
+        keyfile, "PowerManager", "ControlDevice", NULL);
+    if(g_pcat_main_config_data.pm_control_device==NULL ||
+        g_pcat_main_config_data.pm_control_device[0]=='\0')
+    {
+        g_free(g_pcat_main_config_data.pm_control_device);
+        g_pcat_main_config_data.pm_control_device =
+            g_strdup("/dev/pcat-pm-ctl");
+    }
+
     ivalue = g_key_file_get_integer(keyfile, "PowerManager",
         "SerialBaud", NULL);
     g_pcat_main_config_data.pm_serial_baud = ivalue;
@@ -370,6 +397,19 @@ static gboolean pcat_main_config_data_load()
     else
     {
         g_pcat_main_config_data.pm_battery_charge_detection_threshold = 4200;
+    }
+
+    /* serial 模式温度偏移（默认 -40，保持 v1 兼容；与内核 -100 口径不一致
+     * 时按实机校准改为 -100）。仅作用于 serial 模式原始字节换算。 */
+    ivalue = g_key_file_get_integer(keyfile, "PowerManager",
+        "TemperatureOffset", NULL);
+    if(ivalue!=0)
+    {
+        g_pcat_main_config_data.pm_temperature_offset = ivalue;
+    }
+    else
+    {
+        g_pcat_main_config_data.pm_temperature_offset = -40;
     }
 
     ivalue = g_key_file_get_integer(keyfile, "Debug",
@@ -1362,6 +1402,72 @@ static void pcat_main_log_handle_func(const gchar *log_domain,
 }
 
 
+static void pcat_main_transport_mode_resolve(void)
+{
+    PCatManagerTransport mode = PCAT_MANAGER_TRANSPORT_SERIAL;
+    const gchar *env;
+
+    /* 优先级：CLI --mode > CLI --ctl > 环境变量 > 自动检测 */
+    if(g_pcat_main_cmd_mode!=NULL && g_pcat_main_cmd_mode[0]!='\0')
+    {
+        if(g_ascii_strcasecmp(g_pcat_main_cmd_mode, "kernel")==0 ||
+            g_ascii_strcasecmp(g_pcat_main_cmd_mode, "ctl")==0)
+        {
+            mode = PCAT_MANAGER_TRANSPORT_CTL;
+        }
+        else if(g_ascii_strcasecmp(g_pcat_main_cmd_mode, "serial")==0)
+        {
+            mode = PCAT_MANAGER_TRANSPORT_SERIAL;
+        }
+        else
+        {
+            g_warning("Invalid --mode value '%s', fall back to auto detection.",
+                g_pcat_main_cmd_mode);
+            mode = (access("/dev/pcat-pm-ctl", F_OK)==0) ?
+                PCAT_MANAGER_TRANSPORT_CTL : PCAT_MANAGER_TRANSPORT_SERIAL;
+        }
+    }
+    else if(g_pcat_main_cmd_ctl)
+    {
+        mode = PCAT_MANAGER_TRANSPORT_CTL;
+    }
+    else
+    {
+        env = g_getenv("PCAT_MANAGER_MODE");
+        if(env!=NULL && env[0]!='\0')
+        {
+            if(g_ascii_strcasecmp(env, "kernel")==0 ||
+                g_ascii_strcasecmp(env, "ctl")==0)
+            {
+                mode = PCAT_MANAGER_TRANSPORT_CTL;
+            }
+            else if(g_ascii_strcasecmp(env, "serial")==0)
+            {
+                mode = PCAT_MANAGER_TRANSPORT_SERIAL;
+            }
+            else
+            {
+                g_warning("Invalid PCAT_MANAGER_MODE value '%s', fall back to "
+                    "auto detection.", env);
+                mode = (access("/dev/pcat-pm-ctl", F_OK)==0) ?
+                    PCAT_MANAGER_TRANSPORT_CTL :
+                    PCAT_MANAGER_TRANSPORT_SERIAL;
+            }
+        }
+        else
+        {
+            mode = (access("/dev/pcat-pm-ctl", F_OK)==0) ?
+                PCAT_MANAGER_TRANSPORT_CTL : PCAT_MANAGER_TRANSPORT_SERIAL;
+        }
+    }
+
+    g_pcat_main_transport_mode = mode;
+
+    g_message("PMU transport mode: %s",
+        mode==PCAT_MANAGER_TRANSPORT_CTL ?
+        "kernel(ctl) via /dev/pcat-pm-ctl" : "serial via /dev/ttyS4");
+}
+
 int main(int argc, char *argv[])
 {
     GError *error = NULL;
@@ -1398,6 +1504,8 @@ int main(int argc, char *argv[])
     {
         g_warning("Failed to load user config data, use default one!");
     }
+
+    pcat_main_transport_mode_resolve();
 
     if(g_pcat_main_cmd_daemonsize)
     {
@@ -1514,4 +1622,9 @@ PCatManagerRouteMode pcat_main_network_route_mode_get()
 gboolean pcat_main_is_running_on_distro()
 {
     return g_pcat_main_cmd_distro;
+}
+
+PCatManagerTransport pcat_main_transport_mode_get(void)
+{
+    return g_pcat_main_transport_mode;
 }

@@ -4,6 +4,9 @@ After=syslog.target
 
 [Service]
 #ExecStartPre=
+# 默认自动检测传输模式：存在 /dev/pcat-pm-ctl（新内核)自动走 kernel(ctl) 模式，
+# 否则走 serial 模式。如需强制某模式，可在 ExecStart 追加：
+#   --mode=kernel  或  --mode=serial
 ExecStart=/usr/local/bin/pcat-manager --distro
 ExecReload=/bin/kill -HUP $MAINPID
 Restart = always

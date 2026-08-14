@@ -1,5 +1,8 @@
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
 #include <errno.h>
 #include <termios.h>
 #include <sys/types.h>
@@ -100,6 +103,10 @@ typedef struct _PCatPMUManagerData
     guint power_on_event;
     guint modem_power_usage;
     gint board_temp;
+
+    PCatManagerTransport transport;
+    gchar *sysfs_battery_path;
+    gchar *sysfs_charger_path;
 
     guint battery_discharge_table_normal[11];
     guint battery_discharge_table_5g[11];
@@ -393,6 +400,14 @@ static void pcat_pmu_manager_date_time_sync(PCatPMUManagerData *pmu_data)
     GDateTime *dt;
     gint y, m, d, h, min, sec;
 
+    if(pmu_data->transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* 内核 devm_rtc + ntpsec 管理 RTC，用户态不再做 0x9 双向同步 */
+        g_debug("Skip PMU date-time sync 0x9 in ctl mode "
+            "(RTC handled by kernel).");
+        return;
+    }
+
     dt = g_date_time_new_now_utc();
     g_date_time_get_ymd(dt, &y, &m, &d);
     h = g_date_time_get_hour(dt);
@@ -666,7 +681,13 @@ static void pcat_pmu_serial_status_data_parse(PCatPMUManagerData *pmu_data,
 
     now = g_get_monotonic_time();
 
-    if(pmu_data->system_time_set_flag)
+    if(pmu_data->transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* 0x7 状态帧在 ctl 模式被内核吞掉不转发；兜底保证 CTL 模式
+         * 绝不发 0x9 校钟、绝不用 MCU 时间 settimeofday。 */
+        g_debug("Skip PMU time sync/settimeofday logic in ctl mode.");
+    }
+    else if(pmu_data->system_time_set_flag)
     {
         if(now > pmu_data->pmu_time_set_timestamp + 15000000L)
         {
@@ -862,7 +883,9 @@ static void pcat_pmu_serial_status_data_parse(PCatPMUManagerData *pmu_data,
 
     pmu_data->last_charger_voltage = charger_voltage;
     pmu_data->board_temp = board_temp;
-    pmu_data->board_temp -= 40;
+    /* serial 模式温度偏移可配置（TemperatureOffset，默认 -40 保持 v1 兼容）。
+     * 仅作用于 serial 模式原始字节换算；ctl 模式的 sysfs 真实 ℃ 不应用此偏移。 */
+    pmu_data->board_temp -= pcat_main_config_data_get()->pm_temperature_offset;
 
     if(on_battery)
     {
@@ -1171,9 +1194,288 @@ static gboolean pcat_pmu_serial_read_watch_func(GIOChannel *source,
     return TRUE;
 }
 
+/* ===== ctl 模式 sysfs 遥测（内核 photonicat-pm 接管 uart4 后，
+ * 0x7 状态帧被吞，遥测/电量/板温改从 sysfs 读取）===== */
+
+static guint pcat_pmu_sysfs_read_u32(const gchar *path)
+{
+    int fd;
+    gchar buf[64];
+    ssize_t n;
+    unsigned long val = 0;
+
+    fd = open(path, O_RDONLY);
+    if(fd < 0)
+    {
+        return 0;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if(n <= 0)
+    {
+        return 0;
+    }
+    buf[n] = '\0';
+    val = strtoul(buf, NULL, 10);
+
+    return (guint)val;
+}
+
+static void pcat_pmu_sysfs_discover(PCatPMUManagerData *pmu_data)
+{
+    DIR *dir;
+    struct dirent *ent;
+    gchar path[512];
+    gchar type[64];
+    int fd;
+    ssize_t n;
+
+    g_free(pmu_data->sysfs_battery_path);
+    g_free(pmu_data->sysfs_charger_path);
+    pmu_data->sysfs_battery_path = NULL;
+    pmu_data->sysfs_charger_path = NULL;
+
+    dir = opendir("/sys/class/power_supply");
+    if(dir==NULL)
+    {
+        g_warning("Failed to open /sys/class/power_supply: %s",
+            strerror(errno));
+        return;
+    }
+
+    while((ent=readdir(dir))!=NULL)
+    {
+        if(ent->d_name[0]=='.')
+        {
+            continue;
+        }
+
+        g_snprintf(path, sizeof(path),
+            "/sys/class/power_supply/%s/type", ent->d_name);
+        fd = open(path, O_RDONLY);
+        if(fd < 0)
+        {
+            continue;
+        }
+        n = read(fd, type, sizeof(type) - 1);
+        close(fd);
+        if(n <= 0)
+        {
+            continue;
+        }
+        type[n] = '\0';
+        g_strstrip(type);
+
+        if(g_strcmp0(type, "Battery")==0 && pmu_data->sysfs_battery_path==NULL)
+        {
+            pmu_data->sysfs_battery_path =
+                g_strdup_printf("/sys/class/power_supply/%s", ent->d_name);
+        }
+        else if(pmu_data->sysfs_charger_path==NULL &&
+            (g_strcmp0(type, "Mains")==0 || g_strcmp0(type, "USB")==0 ||
+             g_strcmp0(type, "USB_DCP")==0 || g_strcmp0(type, "USB_CDP")==0 ||
+             g_strcmp0(type, "USB_HVDCP")==0 || g_strcmp0(type, "USB_PD")==0 ||
+             g_strcmp0(type, "USB_Type-C")==0))
+        {
+            pmu_data->sysfs_charger_path =
+                g_strdup_printf("/sys/class/power_supply/%s", ent->d_name);
+        }
+    }
+    closedir(dir);
+
+    /* [待验证]: power_supply 节点 type 命名（Battery/USB/Mains 等）
+     * 依赖内核 power_supply_class 注册名，不同 board 可能不同。 */
+    g_message("[待验证] sysfs power supply: battery=%s charger=%s",
+        pmu_data->sysfs_battery_path!=NULL ?
+        pmu_data->sysfs_battery_path : "(none)",
+        pmu_data->sysfs_charger_path!=NULL ?
+        pmu_data->sysfs_charger_path : "(none)");
+}
+
+static gint pcat_pmu_sysfs_board_temp_get(void)
+{
+    DIR *dir;
+    struct dirent *ent;
+    gchar path[512];
+    guint mtemp;
+    gint temp_c = 0;
+
+    /* 扫描 /sys/class/hwmon 下各 hwmonN 的 temp1_input（单位 m°C -> ℃） */
+    dir = opendir("/sys/class/hwmon");
+    if(dir==NULL)
+    {
+        return 0;
+    }
+    while((ent=readdir(dir))!=NULL)
+    {
+        if(ent->d_name[0]=='.')
+        {
+            continue;
+        }
+        g_snprintf(path, sizeof(path), "/sys/class/hwmon/%s/temp1_input",
+            ent->d_name);
+        mtemp = pcat_pmu_sysfs_read_u32(path);
+        if(mtemp > 0)
+        {
+            temp_c = (gint)(mtemp / 1000);
+            break;
+        }
+    }
+    closedir(dir);
+
+    /* [待验证]: 原 serial 模式 board_temp 语义为 (0x7 原始字节 - 40)，
+     * 不确定是否即 ℃；此处直接用真实 ℃（temp1_input/1000），对外
+     * pcat_pmu_manager_board_temp_get 语义可能与此前不一致。 */
+    return temp_c;
+}
+
+static void pcat_pmu_sysfs_write_battery_state(guint percentage,
+    guint battery_voltage_mv, gboolean on_battery)
+{
+    FILE *fp;
+
+    fp = fopen(PCAT_PMU_MANAGER_STATEFS_BATTERY_PATH"/ChargePercentage", "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, "%u\n", percentage);
+        fclose(fp);
+    }
+
+    fp = fopen(PCAT_PMU_MANAGER_STATEFS_BATTERY_PATH"/Voltage", "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, "%u\n", battery_voltage_mv * 1000);
+        fclose(fp);
+    }
+
+    fp = fopen(PCAT_PMU_MANAGER_STATEFS_BATTERY_PATH"/OnBattery", "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, "%u\n", on_battery ? 1 : 0);
+        fclose(fp);
+    }
+
+    fp = fopen(PCAT_PMU_MANAGER_FAKE_BATTERY_DEV, "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, on_battery ? "charging = 0\n" : "charging = 1\n");
+        fclose(fp);
+    }
+
+    fp = fopen(PCAT_PMU_MANAGER_FAKE_BATTERY_DEV, "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, "capacity0 = %u\n", percentage);
+        fclose(fp);
+    }
+}
+
+static void pcat_pmu_sysfs_telemetry_update(PCatPMUManagerData *pmu_data)
+{
+    gchar path[512];
+    guint capacity = 0;
+    guint voltage_uv = 0;
+    gboolean on_battery = TRUE;
+    gboolean status_available = FALSE;
+    gchar status[64] = {0};
+    gint temp_c = 0;
+    int fd;
+    ssize_t n;
+
+    if(pmu_data->sysfs_battery_path==NULL ||
+        pmu_data->sysfs_charger_path==NULL)
+    {
+        pcat_pmu_sysfs_discover(pmu_data);
+    }
+
+    if(pmu_data->sysfs_battery_path!=NULL)
+    {
+        /* 电池电压 voltage_now（µV -> mV） */
+        g_snprintf(path, sizeof(path), "%s/voltage_now",
+            pmu_data->sysfs_battery_path);
+        voltage_uv = pcat_pmu_sysfs_read_u32(path);
+        if(voltage_uv > 0)
+        {
+            pmu_data->last_battery_voltage = voltage_uv / 1000;
+        }
+
+        /* 电量 capacity（%，内核 power_supply 自带，直接采用，
+         * 不做原电压表双线性插值）；缓存按 0-10000 约定保存 */
+        g_snprintf(path, sizeof(path), "%s/capacity",
+            pmu_data->sysfs_battery_path);
+        capacity = pcat_pmu_sysfs_read_u32(path);
+        if(capacity > 0 && capacity <= 100)
+        {
+            pmu_data->last_battery_percentage = capacity * 100;
+        }
+
+        /* status：Charging/Full -> 在充电(非电池供电)，
+         * Discharging/Not charging 等 -> 电池供电 */
+        g_snprintf(path, sizeof(path), "%s/status",
+            pmu_data->sysfs_battery_path);
+        fd = open(path, O_RDONLY);
+        if(fd >= 0)
+        {
+            n = read(fd, status, sizeof(status) - 1);
+            close(fd);
+            if(n > 0)
+            {
+                status[n] = '\0';
+                g_strstrip(status);
+                status_available = TRUE;
+                on_battery = !(g_strcmp0(status, "Charging")==0 ||
+                    g_strcmp0(status, "Full")==0);
+            }
+        }
+    }
+
+    if(pmu_data->sysfs_charger_path!=NULL)
+    {
+        /* 充电器电压：读供电 supply 的 voltage_now（µV -> mV） */
+        g_snprintf(path, sizeof(path), "%s/voltage_now",
+            pmu_data->sysfs_charger_path);
+        voltage_uv = pcat_pmu_sysfs_read_u32(path);
+        if(voltage_uv > 0)
+        {
+            pmu_data->last_charger_voltage = voltage_uv / 1000;
+        }
+    }
+
+    if(!status_available)
+    {
+        /* status 缺失/读取失败：不做恒报电池供电，退化用充电器端电压判定
+         * （与 serial 模式 charge_detection_threshold 语义一致）。
+         * [待验证]: 内核 status 字段缺失时该兜底判定是否贴合实际供电状态。 */
+        const PCatManagerMainConfigData *mcfg = pcat_main_config_data_get();
+        guint charge_threshold = 4200;
+
+        if(mcfg->pm_battery_charge_detection_threshold > 0)
+        {
+            charge_threshold = mcfg->pm_battery_charge_detection_threshold;
+        }
+        on_battery = (pmu_data->last_charger_voltage < charge_threshold);
+
+        g_debug("[待验证] battery status unavailable, fallback on_battery by "
+            "charger voltage: %u mV, threshold %u.", 
+            pmu_data->last_charger_voltage, charge_threshold);
+    }
+
+    pmu_data->last_on_battery_state = on_battery;
+
+    temp_c = pcat_pmu_sysfs_board_temp_get();
+    pmu_data->board_temp = temp_c;
+
+    /* 副作用与原 0x7 解析保持一致：写 statefs 与 fake_battery */
+    pcat_pmu_sysfs_write_battery_state(
+        pmu_data->last_battery_percentage / 100,
+        pmu_data->last_battery_voltage, on_battery);
+}
+
 static gboolean pcat_pmu_serial_open(PCatPMUManagerData *pmu_data)
 {
     PCatManagerMainConfigData *main_config_data;
+    const gchar *device_path;
+    gboolean is_ctl;
     int fd;
     GIOChannel *channel;
     struct termios options;
@@ -1181,81 +1483,103 @@ static gboolean pcat_pmu_serial_open(PCatPMUManagerData *pmu_data)
 
     main_config_data = pcat_main_config_data_get();
 
-    fd = open(main_config_data->pm_serial_device,
-        O_RDWR | O_NOCTTY | O_NDELAY);
+    is_ctl = (pmu_data->transport == PCAT_MANAGER_TRANSPORT_CTL);
+    device_path = is_ctl ? main_config_data->pm_control_device :
+        main_config_data->pm_serial_device;
+
+    if(device_path==NULL || device_path[0]=='\0')
+    {
+        g_warning("No valid PMU device path configured for current "
+            "transport mode.");
+        return FALSE;
+    }
+
+    if(is_ctl)
+    {
+        /* 内核 misc 字符设备 /dev/pcat-pm-ctl：不需要 termios/cfmakeraw，
+         * 仅普通非阻塞读写即可。 */
+        fd = open(device_path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    }
+    else
+    {
+        fd = open(device_path, O_RDWR | O_NOCTTY | O_NDELAY);
+    }
     if(fd < 0)
     {
-        g_warning("Failed to open serial port %s: %s",
-            main_config_data->pm_serial_device, strerror(errno));
+        g_warning("Failed to open PMU device %s: %s",
+            device_path, strerror(errno));
 
         return FALSE;
     }
 
-    switch(main_config_data->pm_serial_baud)
+    if(!is_ctl)
     {
-        case 4800:
+        switch(main_config_data->pm_serial_baud)
         {
-            rspeed = B4800;
-            break;
+            case 4800:
+            {
+                rspeed = B4800;
+                break;
+            }
+            case 9600:
+            {
+                rspeed = B9600;
+                break;
+            }
+            case 19200:
+            {
+                rspeed = B19200;
+                break;
+            }
+            case 38400:
+            {
+                rspeed = B38400;
+                break;
+            }
+            case 57600:
+            {
+                rspeed = B57600;
+                break;
+            }
+            case 115200:
+            {
+                rspeed = B115200;
+                break;
+            }
+            default:
+            {
+                g_warning("Invalid serial speed, set to default speed at %u.",
+                    115200);
+                break;
+            }
         }
-        case 9600:
-        {
-            rspeed = B9600;
-            break;
-        }
-        case 19200:
-        {
-            rspeed = B19200;
-            break;
-        }
-        case 38400:
-        {
-            rspeed = B38400;
-            break;
-        }
-        case 57600:
-        {
-            rspeed = B57600;
-            break;
-        }
-        case 115200:
-        {
-            rspeed = B115200;
-            break;
-        }
-        default:
-        {
-            g_warning("Invalid serial speed, set to default speed at %u.",
-                115200);
-            break;
-        }
-    }
 
-    tcgetattr(fd, &options);
-    cfmakeraw(&options);
-    cfsetispeed(&options, rspeed);
-    cfsetospeed(&options, rspeed);
-    options.c_cflag &= ~CSIZE;
-    options.c_cflag &= ~PARENB;
-    options.c_cflag &= ~PARODD;
-    options.c_cflag &= ~CSTOPB;
-    options.c_cflag &= ~CRTSCTS;
-    options.c_cflag |= CS8;
-    options.c_cflag |= (CLOCAL | CREAD);
-    options.c_iflag &= ~(IGNBRK | BRKINT | ICRNL |
-        INLCR | PARMRK | INPCK | ISTRIP | IXON | IXOFF | IXANY);
-    options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG | IEXTEN);
-    options.c_oflag &= ~OPOST;
-    options.c_cc[VMIN] = 1;
-    options.c_cc[VTIME] = 0;
-    tcflush(fd, TCIOFLUSH);
-    tcsetattr(fd, TCSANOW, &options);
+        tcgetattr(fd, &options);
+        cfmakeraw(&options);
+        cfsetispeed(&options, rspeed);
+        cfsetospeed(&options, rspeed);
+        options.c_cflag &= ~CSIZE;
+        options.c_cflag &= ~PARENB;
+        options.c_cflag &= ~PARODD;
+        options.c_cflag &= ~CSTOPB;
+        options.c_cflag &= ~CRTSCTS;
+        options.c_cflag |= CS8;
+        options.c_cflag |= (CLOCAL | CREAD);
+        options.c_iflag &= ~(IGNBRK | BRKINT | ICRNL |
+            INLCR | PARMRK | INPCK | ISTRIP | IXON | IXOFF | IXANY);
+        options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG | IEXTEN);
+        options.c_oflag &= ~OPOST;
+        options.c_cc[VMIN] = 1;
+        options.c_cc[VTIME] = 0;
+        tcflush(fd, TCIOFLUSH);
+        tcsetattr(fd, TCSANOW, &options);
+    }
 
     channel = g_io_channel_unix_new(fd);
     if(channel==NULL)
     {
-        g_warning("Cannot open channel for serial port %s!",
-            main_config_data->pm_serial_device);
+        g_warning("Cannot open channel for PMU device %s!",
+            device_path);
         close(fd);
 
         return FALSE;
@@ -1289,8 +1613,8 @@ static gboolean pcat_pmu_serial_open(PCatPMUManagerData *pmu_data)
     pmu_data->serial_read_source = g_io_add_watch(channel,
         G_IO_IN, pcat_pmu_serial_read_watch_func, pmu_data);
 
-    g_message("Open PMU serial port %s successfully.",
-        main_config_data->pm_serial_device);
+    g_message("Open PMU device %s successfully.",
+        device_path);
 
     return TRUE;
 }
@@ -1337,6 +1661,13 @@ static gboolean pcat_pmu_manager_check_timeout_func(gpointer user_data)
     guint shutdown_voltage = 0;
     guint charge_detection_threshold = 4200;
 
+    if(pmu_data->transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* ctl 模式：0x7 状态帧被内核吞掉不转发，遥测改从 sysfs 读取。
+         * 放在设备打开早退之前，ctl 设备打开失败/缺失时遥测仍可用。 */
+        pcat_pmu_sysfs_telemetry_update(pmu_data);
+    }
+
     if(pmu_data->serial_channel==NULL)
     {
         pcat_pmu_serial_open(pmu_data);
@@ -1360,9 +1691,12 @@ static gboolean pcat_pmu_manager_check_timeout_func(gpointer user_data)
 
     if(!pmu_data->reboot_request && !pmu_data->shutdown_request)
     {
-        pcat_pmu_serial_write_data_request(pmu_data,
-            PCAT_PMU_MANAGER_COMMAND_HEARTBEAT, FALSE, 0, NULL, 0, FALSE);
-
+        if(pmu_data->transport != PCAT_MANAGER_TRANSPORT_CTL)
+        {
+            pcat_pmu_serial_write_data_request(pmu_data,
+                PCAT_PMU_MANAGER_COMMAND_HEARTBEAT, FALSE, 0, NULL, 0, FALSE);
+        }
+        /* 心跳 0x1 在 ctl 模式由内核接管，用户态不再发送。 */
         uconfig_data = pcat_main_user_config_data_get();
         if(uconfig_data->charger_on_auto_start)
         {
@@ -1538,6 +1872,8 @@ gboolean pcat_pmu_manager_init()
         return TRUE;
     }
 
+    g_pcat_pmu_manager_data.transport = pcat_main_transport_mode_get();
+
     g_pcat_pmu_manager_data.shutdown_request = FALSE;
     g_pcat_pmu_manager_data.reboot_request = FALSE;
     g_pcat_pmu_manager_data.shutdown_process_completed = FALSE;
@@ -1563,6 +1899,12 @@ gboolean pcat_pmu_manager_init()
     if(!pcat_pmu_serial_open(&g_pcat_pmu_manager_data))
     {
         g_warning("Failed to open PMU serial port! Try it later....");
+    }
+
+    if(g_pcat_pmu_manager_data.transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* ctl 模式遥测从 sysfs 读取，预扫描供电/电池节点 */
+        pcat_pmu_sysfs_discover(&g_pcat_pmu_manager_data);
     }
 
     for(i=0;i<11;i++)
@@ -1701,11 +2043,30 @@ void pcat_pmu_manager_uninit()
         g_pcat_pmu_manager_data.pmu_fw_version = NULL;
     }
 
+    g_free(g_pcat_pmu_manager_data.sysfs_battery_path);
+    g_pcat_pmu_manager_data.sysfs_battery_path = NULL;
+    g_free(g_pcat_pmu_manager_data.sysfs_charger_path);
+    g_pcat_pmu_manager_data.sysfs_charger_path = NULL;
+
     g_pcat_pmu_manager_data.initialized = FALSE;
 }
 
 void pcat_pmu_manager_shutdown_request()
 {
+    if(g_pcat_pmu_manager_data.transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* 0xF 关机帧由内核 sys_off 处理 poweroff -> HOST_REQUEST_SHUTDOWN，
+         * 用户态不再发帧。显式触发系统 poweroff 并立即置完成标志，
+         * 避免 main.c 关机路径 30s 假超时/告警。
+         * [待验证]: 内核 sys_off 是否经 ctl 通道向 PMU 下发 HOST_REQUEST_SHUTDOWN。 */
+        g_info("Trigger system poweroff in ctl mode "
+            "(handled by kernel sys_off).");
+        g_spawn_command_line_async("poweroff", NULL);
+        g_pcat_pmu_manager_data.shutdown_request = TRUE;
+        g_pcat_pmu_manager_data.shutdown_process_completed = TRUE;
+        return;
+    }
+
     pcat_pmu_serial_write_data_request(&g_pcat_pmu_manager_data,
         PCAT_PMU_MANAGER_COMMAND_HOST_REQUEST_SHUTDOWN,
         FALSE, 0, NULL, 0, TRUE);
@@ -1714,6 +2075,20 @@ void pcat_pmu_manager_shutdown_request()
 
 void pcat_pmu_manager_reboot_request()
 {
+    if(g_pcat_pmu_manager_data.transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* 内核 sys_off 负责 reboot 复位，用户态不再发 0x13 看门狗。
+         * 显式触发系统 reboot 并立即置完成标志，避免 main.c reboot 路径
+         * 30s 假超时/告警（0x14 ACK 被内核吞，无法依赖其置位）。
+         * [待验证]: 内核 sys_off 是否接管系统 reboot 并复位 PMU。 */
+        g_info("Trigger system reboot in ctl mode "
+            "(handled by kernel sys_off).");
+        g_spawn_command_line_async("reboot", NULL);
+        g_pcat_pmu_manager_data.reboot_request = TRUE;
+        g_pcat_pmu_manager_data.reboot_process_completed = TRUE;
+        return;
+    }
+
     pcat_pmu_manager_watchdog_timeout_set(60);
     g_pcat_pmu_manager_data.reboot_request = TRUE;
 }
@@ -1734,6 +2109,14 @@ void pcat_pmu_manager_watchdog_timeout_set(guint timeout)
 
     if(!g_pcat_pmu_manager_data.initialized)
     {
+        return;
+    }
+
+    if(g_pcat_pmu_manager_data.transport == PCAT_MANAGER_TRANSPORT_CTL)
+    {
+        /* 看门狗 0x13 在 ctl 模式由内核接管，用户态不得再发。 */
+        g_info("Skip watchdog timeout set 0x13 in ctl mode "
+            "(watchdog handled by kernel).");
         return;
     }
 

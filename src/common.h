@@ -29,6 +29,12 @@ typedef enum
     PCAT_MANAGER_MWAN_MODE_DEFAULT
 }PCatManagerMWANMode;
 
+typedef enum
+{
+    PCAT_MANAGER_TRANSPORT_SERIAL, /* 旧内核：经 /dev/ttyS4 直接控制 */
+    PCAT_MANAGER_TRANSPORT_CTL /* 新内核：经 /dev/pcat-pm-ctl（photonicat-pm serdev 驱动接管 uart4） */
+}PCatManagerTransport;
+
 typedef struct _PCatManagerMainConfigData
 {
     gboolean valid;
@@ -44,6 +50,7 @@ typedef struct _PCatManagerMainConfigData
     gboolean hw_gpio_modem_reset_active_low;
 
     gchar *pm_serial_device;
+    gchar *pm_control_device;
     guint pm_serial_baud;
     guint pm_auto_shutdown_voltage_general;
     guint pm_auto_shutdown_voltage_lte;
@@ -62,6 +69,7 @@ typedef struct _PCatManagerMainConfigData
     guint pm_charger_fast_voltage;
     guint pm_battery_full_threshold;
     guint pm_battery_charge_detection_threshold;
+    gint pm_temperature_offset;
 
     gboolean debug_modem_external_exec_stdout_log;
     gboolean debug_output_log;
@@ -104,6 +112,7 @@ void pcat_main_user_config_data_sync();
 void pcat_main_request_shutdown(gboolean send_pmu_request);
 PCatManagerRouteMode pcat_main_network_route_mode_get();
 gboolean pcat_main_is_running_on_distro();
+PCatManagerTransport pcat_main_transport_mode_get(void);
 
 G_END_DECLS
 

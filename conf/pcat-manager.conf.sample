@@ -10,8 +10,15 @@ GPIOModemResetLine=8
 GPIOModemResetActiveLow=0
 
 [PowerManager]
+# 传输模式二选一（优先级 CLI --mode > 环境变量 PCAT_MANAGER_MODE > 自动检测）：
+#   - kernel/ctl：新内核（photonicat-pm serdev 驱动接管 uart4），经 ControlDevice
+#     与内核 misc 字符设备通信，遥测走 sysfs，心跳/看门狗/RTC/关机帧由内核接管。
+#   - serial   ：旧内核（UART 未被接管），保持 v1 现状直接经 SerialDevice 控制。
+#   例：pcat-manager --mode=kernel   或   PCAT_MANAGER_MODE=serial pcat-manager
+ControlDevice=/dev/pcat-pm-ctl
 SerialDevice=/dev/ttyS4
 SerialBaud=115200
+# TemperatureOffset=-40  # serial 模式温度偏移（默认 -40，与内核 -100 不一致时按实机校准改为 -100）
 AutoShutdownVoltageGeneral=0
 AutoShutdownVoltageLTE=0
 AutoShutdownVoltage5G=3600
