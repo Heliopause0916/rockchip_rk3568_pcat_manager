@@ -112,6 +112,7 @@ response = s.recv(1024)
 
 **System Commands:**
 - `network-route-mode-get` - Get current network routing mode
+- `net-status-led-set` - Manually set the network status LED (0x19 NET_STATUS_LED_SETUP frame)
 
 #### Response Format:
 All responses are JSON objects containing:
@@ -163,5 +164,43 @@ Response:
   "isp-plmn": "12345"
 }
 ```
+
+**net-status-led-set**
+Request (literal modes):
+```json
+{"command": "net-status-led-set", "led": "on"}
+{"command": "net-status-led-set", "led": "off"}
+{"command": "net-status-led-set", "led": "wired"}
+{"command": "net-status-led-set", "led": "mobile"}
+{"command": "net-status-led-set", "led": "unknown"}
+```
+
+Request (custom timing, milliseconds):
+```json
+{"command": "net-status-led-set", "on_time": 100, "down_time": 0, "repeat": 0}
+```
+
+Response (success):
+```json
+{
+  "command": "net-status-led-set",
+  "code": 0,
+  "result": true
+}
+```
+
+Response (`led` value not recognized):
+```json
+{
+  "command": "net-status-led-set",
+  "code": 1,
+  "result": false,
+  "error": "invalid led value: bogus"
+}
+```
+
+- `led` literal values: `on` (steady on), `off` (off), `wired` (fast blink), `mobile` (slow blink), `unknown` (steady on). The `led` field takes priority over the timing fields when both are present; any other value is rejected.
+- Custom timing: `on_time` is required, `down_time` and `repeat` default to `0`. All three fields are in milliseconds and must be within `[0, 65535]`.
+- Known limitation: in `--distro` mode this command is the only source of LED trigger; in non-`--distro` mode, the mwan logic may overwrite manual settings when the routing mode changes.
 
 

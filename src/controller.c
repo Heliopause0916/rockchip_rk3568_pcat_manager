@@ -1169,6 +1169,145 @@ static void pcat_controller_command_modem_network_get_func(
     json_object_put(rroot);
 }
 
+static void pcat_controller_command_net_status_led_set_func(
+    PCatControllerData *ctrl_data,
+    PCatControllerConnectionData *connection_data,
+    const gchar *command, struct json_object *root)
+{
+    struct json_object *rroot, *child;
+    const gchar *led_str = NULL;
+    const gchar *error_str = NULL;
+    gboolean valid = TRUE;
+    gint on_time = 0;
+    gint down_time = 0;
+    gint repeat = 0;
+    gchar error_buf[128] = {0};
+
+    if(json_object_object_get_ex(root, "led", &child))
+    {
+        led_str = json_object_get_string(child);
+
+        if(led_str==NULL)
+        {
+            valid = FALSE;
+            error_str = "invalid led value";
+        }
+        else if(g_strcmp0(led_str, "on")==0 ||
+            g_strcmp0(led_str, "unknown")==0)
+        {
+            on_time = 100;
+        }
+        else if(g_strcmp0(led_str, "off")==0)
+        {
+            down_time = 100;
+        }
+        else if(g_strcmp0(led_str, "wired")==0)
+        {
+            on_time = 50;
+            down_time = 50;
+        }
+        else if(g_strcmp0(led_str, "mobile")==0)
+        {
+            on_time = 20;
+            down_time = 380;
+        }
+        else
+        {
+            valid = FALSE;
+            g_snprintf(error_buf, sizeof(error_buf), "invalid led value: %s",
+                led_str);
+            error_str = error_buf;
+        }
+    }
+    else
+    {
+        if(json_object_object_get_ex(root, "on_time", &child))
+        {
+            if(json_object_get_type(child)!=json_type_int)
+            {
+                valid = FALSE;
+                error_str = "on_time must be an integer";
+            }
+            else
+            {
+                on_time = json_object_get_int(child);
+                if(on_time < 0 || on_time > 65535)
+                {
+                    valid = FALSE;
+                    error_str = "on_time out of range [0,65535]";
+                }
+            }
+        }
+        else
+        {
+            valid = FALSE;
+            error_str = "missing parameter: led or on_time";
+        }
+
+        if(valid && json_object_object_get_ex(root, "down_time", &child))
+        {
+            if(json_object_get_type(child)!=json_type_int)
+            {
+                valid = FALSE;
+                error_str = "down_time must be an integer";
+            }
+            else
+            {
+                down_time = json_object_get_int(child);
+                if(down_time < 0 || down_time > 65535)
+                {
+                    valid = FALSE;
+                    error_str = "down_time out of range [0,65535]";
+                }
+            }
+        }
+
+        if(valid && json_object_object_get_ex(root, "repeat", &child))
+        {
+            if(json_object_get_type(child)!=json_type_int)
+            {
+                valid = FALSE;
+                error_str = "repeat must be an integer";
+            }
+            else
+            {
+                repeat = json_object_get_int(child);
+                if(repeat < 0 || repeat > 65535)
+                {
+                    valid = FALSE;
+                    error_str = "repeat out of range [0,65535]";
+                }
+            }
+        }
+    }
+
+    if(valid)
+    {
+        pcat_pmu_manager_net_status_led_setup(on_time, down_time, repeat);
+    }
+
+    rroot = json_object_new_object();
+
+    child = json_object_new_string(command);
+    json_object_object_add(rroot, "command", child);
+
+    child = json_object_new_int(valid ? 0 : 1);
+    json_object_object_add(rroot, "code", child);
+
+    child = json_object_new_boolean(valid);
+    json_object_object_add(rroot, "result", child);
+
+    if(!valid)
+    {
+        child = json_object_new_string(error_str);
+        json_object_object_add(rroot, "error", child);
+    }
+
+    pcat_controller_unix_socket_output_json_push(ctrl_data, connection_data,
+        rroot);
+    json_object_put(rroot);
+}
+
 static PCatControllerCommandData g_pcat_controller_command_list[] =
 {
     {
@@ -1214,6 +1353,10 @@ static PCatControllerCommandData g_pcat_controller_command_list[] =
     {
         .command = "modem-network-get",
         .callback = pcat_controller_command_modem_network_get_func,
+    },
+    {
+        .command = "net-status-led-set",
+        .callback = pcat_controller_command_net_status_led_set_func,
     },
     { NULL, NULL }
 };
